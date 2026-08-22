@@ -1,0 +1,51 @@
+{
+  "name": "koishi-plugin-sticker-convert-br",
+  "version": "0.0.1",
+  "description": "基于原版 koishi-plugin-sticker-convert 而来，移除了群相册功能，并且修复了GIF转发问题，其余功能完全兼容原版",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "readme.md"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Minecraft-1314",
+    "url": "https://github.com/Minecraft-1314"
+  },
+  "homepage": "https://github.com/Minecraft-1314/koishi-plugin-sticker-convert-br#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Minecraft-1314/koishi-plugin-sticker-convert-br.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Minecraft-1314/koishi-plugin-sticker-convert-br/issues"
+  },
+  "keywords": [
+    "koishi",
+    "plugin",
+    "qq",
+    "sticker",
+    "emoji",
+    "converter",
+    "onebot",
+    "chatbot",
+    "表情",
+    "表情包",
+    "图片转换",
+    "gif",
+    "image"
+  ],
+  "peerDependencies": {
+    "koishi": "^4.18.7"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w"
+  },
+  "koishi": {
+    "description": {
+      "zh": "基于原版 koishi-plugin-sticker-convert 而来，移除了群相册功能，并且修复了GIF转发问题，其余功能完全兼容原版"
+    }
+  }
+}
