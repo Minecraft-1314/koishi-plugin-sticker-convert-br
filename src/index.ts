@@ -1,7 +1,5 @@
 import { Context, Schema, h, Logger, Session } from 'koishi'
-import { resolve } from 'path'
 import { createHash } from 'crypto'
-import { createWriteStream, existsSync, mkdirSync, rmSync } from 'fs'
 
 export const name = 'sticker-convert'
 export const usage = `
@@ -26,12 +24,12 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.object({
   staticImageMode: Schema.union([
-    Schema.const('buffer').description('直接发送图片（推荐）'),
-    Schema.const('file').description('作为文件发送')
+    Schema.const('buffer').description('直接发送图片（推荐，兼容性最好）'),
+    Schema.const('file').description('作为文件发送（使用 base64 上传）')
   ]).default('buffer').description('静态图片（jpg/png/webp）的发送方式'),
   gifMode: Schema.union([
-    Schema.const('file').description('作为文件发送（推荐）'),
-    Schema.const('buffer').description('直接发送图片')
+    Schema.const('buffer').description('直接发送图片（推荐，兼容性最好）'),
+    Schema.const('file').description('作为文件发送（使用 base64 上传）')
   ]).default('file').description('GIF 动图的发送方式'),
   debug: Schema.boolean().default(false).description('是否启用调试日志'),
 }).description('发送设置')
@@ -39,23 +37,14 @@ export const Config: Schema<Config> = Schema.object({
 const logger = new Logger('sticker-convert')
 
 export function apply(ctx: Context, config: Config) {
-  const storageDir = resolve(ctx.baseDir, 'data', 'sticker-convert')
-  if (!existsSync(storageDir)) {
-    mkdirSync(storageDir, { recursive: true })
-  }
-
   async function downloadImage(url: string): Promise<{ buffer: Buffer, mime: string, size: number }> {
     try {
       const response = await ctx.http.get(url, { responseType: 'arraybuffer', timeout: 30000 })
       const buffer = Buffer.from(response)
 
-      let mime = 'image/unknown'
-      if (buffer.length >= 4) {
-        const header = buffer.toString('hex', 0, 4)
-        if (header.startsWith('89504e47')) mime = 'image/png'
-        else if (header.startsWith('ffd8ff')) mime = 'image/jpeg'
-        else if (header.startsWith('47494638')) mime = 'image/gif'
-        else if (buffer.toString('ascii', 0, 4) === 'RIFF') mime = 'image/webp'
+      let mime = detectMimeFromHeader(buffer)
+      if (mime === 'image/unknown') {
+        mime = guessMimeFromUrl(url)
       }
 
       return { buffer, mime, size: buffer.length }
@@ -64,12 +53,61 @@ export function apply(ctx: Context, config: Config) {
     }
   }
 
+  function detectMimeFromHeader(buffer: Buffer): string {
+    if (buffer.length >= 4) {
+      const header = buffer.toString('hex', 0, 4)
+      if (header.startsWith('89504e47')) return 'image/png'
+      if (header.startsWith('ffd8ff')) return 'image/jpeg'
+      if (header.startsWith('47494638')) return 'image/gif'
+      if (header.startsWith('52494646')) {
+        if (buffer.length >= 12 && buffer.toString('ascii', 8, 12) === 'WEBP') {
+          return 'image/webp'
+        }
+      }
+      if (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp'
+      if (buffer.length >= 4 && buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x01 && buffer[3] === 0x00) return 'image/x-icon'
+      if (buffer.length >= 4 && buffer[0] === 0x49 && buffer[1] === 0x49 && buffer[2] === 0x2a && buffer[3] === 0x00) return 'image/tiff'
+      if (buffer.length >= 4 && buffer[0] === 0x4d && buffer[1] === 0x4d && buffer[2] === 0x00 && buffer[3] === 0x2a) return 'image/tiff'
+      if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'avif') return 'image/avif'
+      if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'heic') return 'image/heic'
+      if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'heif') return 'image/heif'
+    }
+    return 'image/unknown'
+  }
+
+  function guessMimeFromUrl(url: string): string {
+    const ext = url.replace(/[?#].*$/, '').split('.').pop()?.toLowerCase() || ''
+    const mimeMap: Record<string, string> = {
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      gif: 'image/gif',
+      webp: 'image/webp',
+      bmp: 'image/bmp',
+      svg: 'image/svg+xml',
+      ico: 'image/x-icon',
+      tiff: 'image/tiff',
+      tif: 'image/tiff',
+      avif: 'image/avif',
+      heic: 'image/heic',
+      heif: 'image/heif',
+    }
+    return mimeMap[ext] || 'image/unknown'
+  }
+
   function getExtFromMime(mime: string): string {
     const mimeMap: Record<string, string> = {
       'image/png': 'png',
       'image/jpeg': 'jpg',
       'image/gif': 'gif',
-      'image/webp': 'webp'
+      'image/webp': 'webp',
+      'image/bmp': 'bmp',
+      'image/svg+xml': 'svg',
+      'image/x-icon': 'ico',
+      'image/tiff': 'tiff',
+      'image/avif': 'avif',
+      'image/heic': 'heic',
+      'image/heif': 'heif',
     }
     return mimeMap[mime] || 'jpg'
   }
@@ -85,39 +123,55 @@ export function apply(ctx: Context, config: Config) {
   }
 
   function isOneBotPlatform(session: Session): boolean {
-    return session.platform === 'onebot'
+    return session.platform === 'onebot' || session.platform.startsWith('onebot')
+  }
+
+  function collectImageElements(elements: any[]): any[] {
+    const results: any[] = []
+    for (const el of elements) {
+      if (!el) continue
+      if (el.type === 'img' || el.type === 'image' || el.type === 'mface' || el.type === 'sticker') {
+        results.push(el)
+      } else if (el.type === 'face') {
+        const children = el.children || []
+        const imgs = collectImageElements(children)
+        results.push(...imgs)
+      } else if (el.children && el.children.length > 0) {
+        results.push(...collectImageElements(el.children))
+      }
+    }
+    return results
   }
 
   async function sendFileFromBuffer(session: Session, buffer: Buffer, fileName: string): Promise<void> {
-    const tempDir = resolve(storageDir, `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`)
-    mkdirSync(tempDir, { recursive: true })
-    const filePath = resolve(tempDir, fileName)
-    const fileUrl = 'file://' + filePath.replace(/\\/g, '/')
+    const base64Data = buffer.toString('base64')
+    const fileUri = `base64://${base64Data}`
+    const isDirect = session.isDirect
+    const internal = (session.bot as any).internal
+
+    if (!internal) {
+      throw new Error('当前 OneBot 适配器未提供文件上传 API')
+    }
+
+    debugLog('尝试直接调用 OneBot 文件上传 API', { fileName, size: buffer.length, isDirect })
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const stream = createWriteStream(filePath)
-        stream.write(buffer)
-        stream.end()
-        stream.on('finish', () => resolve())
-        stream.on('error', reject)
-      })
-
-      debugLog('临时文件已保存', { filePath, fileName })
-      await session.send(h.file(fileUrl, { filename: fileName }))
-      debugLog('文件发送成功', { filePath, fileName })
-    } catch (error) {
-      debugLog('文件发送失败', { error: error.message, filePath })
-      throw error
-    } finally {
-      setTimeout(() => {
-        try {
-          rmSync(tempDir, { recursive: true, force: true })
-          debugLog('临时目录已删除', { tempDir })
-        } catch (error) {
-          logger.warn('删除临时目录失败:', error)
+      if (isDirect) {
+        if (typeof internal.uploadPrivateFile !== 'function') {
+          throw new Error('当前 OneBot 适配器不支持私聊文件上传')
         }
-      }, 60000)
+        await internal.uploadPrivateFile(session.userId, fileUri, fileName)
+        debugLog('私聊文件上传成功', { fileName })
+      } else {
+        if (typeof internal.uploadGroupFile !== 'function') {
+          throw new Error('当前 OneBot 适配器不支持群聊文件上传')
+        }
+        await internal.uploadGroupFile(session.channelId, fileUri, fileName)
+        debugLog('群聊文件上传成功', { fileName })
+      }
+    } catch (error) {
+      debugLog('OneBot 文件上传失败', { error: error.message })
+      throw error
     }
   }
 
@@ -139,23 +193,7 @@ export function apply(ctx: Context, config: Config) {
       return '请回复包含表情的消息后使用此命令'
     }
 
-    debugLog('找到回复消息', {
-      messageId: quote.messageId,
-      elements: quote.elements?.length,
-      elementTypes: quote.elements?.map(el => el.type)
-    })
-
-    const images = h.select(quote.elements, 'img')
-    const imageElements = h.select(quote.elements, 'image')
-    const mfaceElements = h.select(quote.elements, 'mface')
-    const allImageLike = [...images, ...imageElements, ...mfaceElements]
-
-    debugLog('提取图片元素', {
-      imgCount: images.length,
-      imageCount: imageElements.length,
-      mfaceCount: mfaceElements.length,
-      total: allImageLike.length
-    })
+    const allImageLike = collectImageElements(quote.elements || [])
 
     if (allImageLike.length === 0) {
       debugLog('没有找到图片元素')
@@ -167,22 +205,18 @@ export function apply(ctx: Context, config: Config) {
 
     for (const img of allImageLike) {
       try {
-        debugLog('处理图片', { type: img.type, attrs: img.attrs })
-
         let url: string
-        if (img.type === 'mface') {
-          url = img.attrs.url
+        if (img.type === 'mface' || img.type === 'sticker') {
+          url = img.attrs.url || img.attrs.src
         } else {
           url = img.attrs.src || img.attrs.url
         }
 
         if (!url) {
-          debugLog('图片URL无效')
+          debugLog('图片URL无效', { type: img.type, attrs: img.attrs })
           results.push('发现无效图片链接')
           continue
         }
-
-        debugLog('开始下载图片', { type: img.type, url })
 
         const { buffer, mime, size } = await downloadImage(url)
         const md5 = createHash('md5').update(buffer).digest('hex')
@@ -195,32 +229,28 @@ export function apply(ctx: Context, config: Config) {
         if (isGif) {
           if (config.gifMode === 'file') {
             try {
-              debugLog('以文件方式发送GIF')
               await sendFileFromBuffer(session, buffer, fileName)
               results.push(`GIF 已转为文件: ${fileName}`)
             } catch (error) {
-              debugLog('GIF文件发送失败，尝试作为图片发送', { error: error.message })
+              debugLog('GIF文件发送失败，降级为图片发送', { error: error.message })
               await session.send(h.image(buffer, 'image/gif'))
               results.push(`GIF 已转换（作为图片发送）`)
             }
           } else {
-            debugLog('以图片方式发送GIF')
             await session.send(h.image(buffer, 'image/gif'))
             results.push(`GIF 已转换为图片`)
           }
         } else {
           if (config.staticImageMode === 'file') {
             try {
-              debugLog('以文件方式发送静态图片')
               await sendFileFromBuffer(session, buffer, fileName)
               results.push(`图片已转为文件: ${fileName}`)
             } catch (error) {
-              debugLog('静态图片文件发送失败，尝试作为图片发送', { error: error.message })
+              debugLog('静态图片文件发送失败，降级为图片发送', { error: error.message })
               await session.send(h.image(buffer, mime))
               results.push(`图片已转换`)
             }
           } else {
-            debugLog('以图片方式发送静态图片')
             await session.send(h.image(buffer, mime))
             results.push(`图片已转换`)
           }
