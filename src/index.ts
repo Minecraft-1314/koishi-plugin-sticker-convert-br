@@ -48,7 +48,7 @@ export function apply(ctx: Context, config: Config) {
     try {
       const response = await ctx.http.get(url, { responseType: 'arraybuffer', timeout: 30000 })
       const buffer = Buffer.from(response)
-      
+
       let mime = 'image/unknown'
       if (buffer.length >= 4) {
         const header = buffer.toString('hex', 0, 4)
@@ -57,7 +57,7 @@ export function apply(ctx: Context, config: Config) {
         else if (header.startsWith('47494638')) mime = 'image/gif'
         else if (buffer.toString('ascii', 0, 4) === 'RIFF') mime = 'image/webp'
       }
-      
+
       return { buffer, mime, size: buffer.length }
     } catch (error) {
       throw new Error(`下载失败: ${error.message}`)
@@ -92,7 +92,8 @@ export function apply(ctx: Context, config: Config) {
     const tempDir = resolve(storageDir, `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`)
     mkdirSync(tempDir, { recursive: true })
     const filePath = resolve(tempDir, fileName)
-    
+    const fileUrl = 'file://' + filePath.replace(/\\/g, '/')
+
     try {
       await new Promise<void>((resolve, reject) => {
         const stream = createWriteStream(filePath)
@@ -101,9 +102,9 @@ export function apply(ctx: Context, config: Config) {
         stream.on('finish', () => resolve())
         stream.on('error', reject)
       })
-      
+
       debugLog('临时文件已保存', { filePath, fileName })
-      await session.send(h.file(filePath))
+      await session.send(h.file(fileUrl, { filename: fileName }))
       debugLog('文件发送成功', { filePath, fileName })
     } catch (error) {
       debugLog('文件发送失败', { error: error.message, filePath })
@@ -121,10 +122,10 @@ export function apply(ctx: Context, config: Config) {
   }
 
   async function convertEmoji(session: Session) {
-    debugLog('开始转换表情', { 
-      platform: session.platform, 
+    debugLog('开始转换表情', {
+      platform: session.platform,
       channelId: session.channelId,
-      userId: session.userId 
+      userId: session.userId
     })
 
     if (!isOneBotPlatform(session)) {
@@ -138,24 +139,24 @@ export function apply(ctx: Context, config: Config) {
       return '请回复包含表情的消息后使用此命令'
     }
 
-    debugLog('找到回复消息', { 
+    debugLog('找到回复消息', {
       messageId: quote.messageId,
       elements: quote.elements?.length,
       elementTypes: quote.elements?.map(el => el.type)
     })
 
     const images = h.select(quote.elements, 'img')
-    const imageElements = h.select(quote.elements, 'image') 
+    const imageElements = h.select(quote.elements, 'image')
     const mfaceElements = h.select(quote.elements, 'mface')
     const allImageLike = [...images, ...imageElements, ...mfaceElements]
-    
-    debugLog('提取图片元素', { 
-      imgCount: images.length, 
+
+    debugLog('提取图片元素', {
+      imgCount: images.length,
       imageCount: imageElements.length,
       mfaceCount: mfaceElements.length,
       total: allImageLike.length
     })
-    
+
     if (allImageLike.length === 0) {
       debugLog('没有找到图片元素')
       return '被回复的消息中没有找到图片表情'
@@ -167,14 +168,14 @@ export function apply(ctx: Context, config: Config) {
     for (const img of allImageLike) {
       try {
         debugLog('处理图片', { type: img.type, attrs: img.attrs })
-        
+
         let url: string
         if (img.type === 'mface') {
           url = img.attrs.url
         } else {
           url = img.attrs.src || img.attrs.url
         }
-        
+
         if (!url) {
           debugLog('图片URL无效')
           results.push('发现无效图片链接')
