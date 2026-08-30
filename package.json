@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-sticker-convert-br",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "基于原版 koishi-plugin-sticker-convert 而来，移除了群相册功能，并且修复了GIF转发问题，其余功能完全兼容原版",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
@@ -38,6 +38,9 @@
   ],
   "peerDependencies": {
     "koishi": "^4.18.7"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
